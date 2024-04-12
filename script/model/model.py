@@ -141,7 +141,7 @@ class VAE(nn.Module):
         return output
 
 class Class_VAE(nn.Module):
-    def __init__(self, vae_dims, c_dim,domain_dim,bn=False, dropout=0, binary=True,finally_activate = nn.Sigmoid(),num_class = 0,device = 'cpu',temperature = 0.05):
+    def __init__(self, vae_dims, c_dim,domain_dim = None,bn=False, dropout=0, binary=True,finally_activate = nn.Sigmoid(),num_class = 0,device = 'cpu',temperature = 0.05):
         super(Class_VAE,self).__init__()
         self.vae_s = VAE(vae_dims, bn, dropout, binary)
         # self.vae_class = VAE(domain_dim, bn, dropout, True)
@@ -235,17 +235,18 @@ class Class_VAE(nn.Module):
         pred_logit = self.classifier(z,reverse = True)
         pred_prob = torch.sigmoid(pred_logit)
         class_loss = self.class_t_criterion(pred_prob,memory_bank.threshold)
-        memory_bank.update_weight(label=close_pred_label.detach(),index=index.detach(),prob=pred_prob.detach(),epsilon=0.95)
+        memory_bank.update_weight(label=close_pred_label.detach(),index=index.detach(),prob=pred_prob.detach(),epsilon=th)
         
         return (-likelihood,kl_loss,class_loss)
 
     def class_t_loss(self,pred_prob,threshold):
-        threshold = torch.ones_like(pred_prob) * 0.5
+        # threshold = torch.ones_like(pred_prob) * 0.5
         pred_prob_neg = 1. - pred_prob
         index = torch.arange(0,pred_prob.shape[0])
         max_prob = torch.amax((1 - threshold[index,:]).detach(),dim=0)
         weight = torch.where(pred_prob.detach() > threshold[index,:],1 - pred_prob.detach(),pred_prob.detach())
         weight = torch.where(weight > max_prob,max_prob,weight)
+        # weight = torch.abs(pred_prob.detach() - threshold[index,:])
         class_loss = torch.mean(torch.mean(weight*(-threshold[index,:] * torch.log(pred_prob + 1e-8) - (1-threshold)[index,:] * torch.log(pred_prob_neg + 1e-8)),dim=1))
         return class_loss
     
@@ -269,7 +270,8 @@ class Class_VAE(nn.Module):
             class_num = 0,
             embedding_size = 0,
             logit_save:Logit_Linear = None,
-            weight = None
+            weight = None,
+            threshold = 0.95
        ):
         self.to(device)
         # self.classifier.to(device)
@@ -326,7 +328,7 @@ class Class_VAE(nn.Module):
                     
                     
                     recon_loss_t , kl_loss_t,class_loss_t = self.loss_target(x = x_t,index = index_t,device=device,
-                                                                                                    domain=domain_t,memory_bank=memory_bank)
+                                                                                                    domain=domain_t,memory_bank=memory_bank,th=threshold)
                     loss = (recon_loss_t + kl_loss_t + recon_loss_s + kl_loss_s) / 2 + c_class_loss + class_loss_t * args.class_t_coff + class_loss_s
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(self.parameters(), 10) # clip

@@ -3,29 +3,30 @@ import numpy as np
 import os
 import scanpy as sc
 import argparse
-parser = argparse.ArgumentParser(description='EpiAnno: Single-cell epigenomic data annotation via supervised non-linear embedding')
-parser.add_argument('--epoch', '-n', default=2000,type=int, help='training epoch')
+parser = argparse.ArgumentParser(description='OVAAnno: Detecting novel cell type in single-cell chromatin accessibility data via open-set domain adaptation')
+parser.add_argument('--train_data',type=str, help='train dataset path')
+parser.add_argument('--test_data',type=str, help='test dataset path')
+parser.add_argument('--epoch',default=4000,type=int, help='training epoch')
 parser.add_argument('--class_coff', default=1, type=int, help='classifier coefficients')
+parser.add_argument('--class_t_coff', default=1, type=int, help='classifier coefficients')
 parser.add_argument('--adv_coff', default=1, type=int, help='adversial coefficients')
-parser.add_argument('--center_coff', default=1,type=float, help='center_src coefficients')
-parser.add_argument('--sematic_coff', default=1,type=int, help='sematic coefficients')
-parser.add_argument('--pre_train', default=3000,type=int, help='pretrain epoch')
-parser.add_argument('--binary', action="store_true", help='binary setting')
-parser.add_argument('--sematic', action="store_true", help='using sematic loss')
+parser.add_argument('--binary', action="store_true", help='Flag to set whether to use binary cross-entropy loss for reconstruction')
 parser.add_argument('--hard_weight', action="store_true", help='using hardest weight')
 parser.add_argument('--sample_weight', action="store_true", help='using sample weight')
 parser.add_argument('--batch',default=64,type=int,help='batch size')
 parser.add_argument('--lr',default=0.0002,type=float,help='learning rate')
-parser.add_argument('--device',default=5,type=int,help='GPU device')
-parser.add_argument('--class_t',action="store_true",help='k nearest neighbors')
+parser.add_argument('--device',default=0,type=int,help='GPU device')
+parser.add_argument('--threshold','-t',default=0.95,type=float,help='top inteval(0.95 as a better choice)')
+parser.add_argument('--class_t',action="store_true",help='using hardest loss')
+parser.add_argument('--flag',default='_',type=str, help='save path flag')
 args = parser.parse_args()
 epoch = args.epoch
-domain = args.domain
+# domain = args.domain
 binary = args.binary
 batch_size = args.batch
 lr = args.lr
 threshold = args.threshold
-k = args.k
+# k = args.k
 # time = args.time
 device = args.device
 flag = args.flag
@@ -49,10 +50,10 @@ from utils.utils import set_seed,ForeverDataIterator,ForeverDataIteratorExtensio
 
 set_seed()
 
-train_adata = sc.read_h5ad("../atac_class/EpiAnno_Forebrain.h5ad")
-test_adata = sc.read_h5ad("../atac_class/preprocess_mouse_brain.h5ad")
+train_adata = sc.read_h5ad(args.train_data)
+test_adata = sc.read_h5ad(args.test_data)
 train_adata.X[train_adata.X > 0] = 1
-test_adata = test_adata[test_adata.obs["domain"] == 1]
+test_adata.X[test_adata.X > 0] = 1
 train_adata.obs['domain'] = 0
 test_adata.obs['domain'] = 1
 
@@ -110,7 +111,7 @@ for i in np.unique(train_adata.obs['Label'].values):
 train_loader = load_train_dataset(train_adata,weight=class_weight,onehotlabel=train_onehot,batch_size=batch_size,drop_last=False,num_workers=4,shuffle=True,sample=None)
 test_adata_loader_1 = load_train_dataset(test_adata,batch_size = batch_size,shuffle=True,drop_last=False,num_workers=4,sample=None)
 
-print('test batch size {}'.format(round(batch_size * alpha)))
+# print('test batch size {}'.format(round(batch_size * alpha)))
 
 latent_dim = 32
 encode_dim = [3200,1600,800,400]
@@ -130,8 +131,8 @@ train_iter = ForeverDataIteratorExtension(train_loader)
 test_iter = ForeverDataIterator(test_adata_loader_1)#,length=test_adata.shape[0]
 memory_bank = LinearAverage(inputSize=class_dim,outputSize=len(test_adata),device=device,threshold=np.ones((batch_size,class_dim)),celltype = test_adata.obs['Label'].values)
 # memory_bank_s = LinearAverage(inputSize=latent_dim,outputSize=len(train_adata),device=device,label = con_select)
-logit_save = Logit_Linear(train_adata.shape[0],train_adata.obs['Label'].values,device=device)
-model = Class_VAE(dims,c_dim,domain_dim=domain_dim,dropout=0,binary = binary,finally_activate=None,num_class=class_dim,device=device,temperature=args.temperature)
+# logit_save = Logit_Linear(train_adata.shape[0],train_adata.obs['Label'].values,device=device)
+model = Class_VAE(dims,c_dim,domain_dim=domain_dim,dropout=0,binary = binary,finally_activate=None,num_class=class_dim,device=device)
 # save_path = ('hardest_class_' if args.hard_weight else 'class_') + str(args.class_coff) + ('_class_adv_' if args.class_adv else '_full_adv_') + str(args.adv_coff) + ('_sematic' if args.sematic else '') + ('_class_t' if args.class_t else '') + '_n_' + str(epoch) + '_' + str(batch_size) + '_' + np.unique(test_adata.obs['tissue'])[0] +'_forebrain_onehot'
 save_path = 'n_' + str(epoch) + '_' + str(batch_size) + '_' + flag
 
@@ -153,7 +154,7 @@ model.fit(args,train_iter = train_iter,
             weight=weight
             )
 
-model.load_state_dict(torch.load('save_model/'+ save_path + '_vae_model.pt'))
+# model.load_state_dict(torch.load('save_model/'+ save_path + '_vae_model.pt'))
 
 del train_loader
 del test_adata_loader_1
@@ -194,20 +195,20 @@ test_prob_select = test_prob[np.arange(0,len(test_pred_label)),test_pred_label]
 # test_pred_label[test_pred_label != test_o_result] = class_dim
 test_embedding.obs["score"] = test_prob_select
 
-for i in [0.5,0.7,0.8,0.9]:
-    test_pred_label[test_prob_select < i] = class_dim
-    print("{} EAS_EpiAnno:{} , same:{} , diff:{}".format(i,*compute_EAS_EpiAnno(y_pred=test_pred_label,origin_label=origin_label,y_true = test_adata.obs["Label"].values)))
-    print("{} EAS:{}".format(i,compute_EAS(y_pred=test_pred_label,y_true = test_adata.obs["Label"].values,unknown=class_dim)))
+# for i in [0.5,0.7,0.8,0.9]:
+test_pred_label[test_prob_select < 0.5] = class_dim
+print("{} EAS_EpiAnno:{} , same:{} , diff:{}".format(i,*compute_EAS_EpiAnno(y_pred=test_pred_label,origin_label=origin_label,y_true = test_adata.obs["Label"].values)))
+print("{} EAS:{}".format(i,compute_EAS(y_pred=test_pred_label,y_true = test_adata.obs["Label"].values,unknown=class_dim)))
 
-test_o_result = np.argmax(test_prob,axis = 1)
-test_prob_max = np.max(test_prob,axis = 1)
-test_pred_label = test_adata.obs['pred_label_num'].values
-test_pred_label[test_pred_label != test_o_result] = class_dim
-test_pred_label[test_prob_max < 0.5] = class_dim
-print("test prob max EAS_EpiAnno:{} , same:{} , diff:{}".format(*compute_EAS_EpiAnno(y_pred=test_pred_label,origin_label=origin_label,y_true = test_adata.obs["Label"].values)))
-print("test prob max EAS:{}".format(compute_EAS(y_pred=test_pred_label,y_true = test_adata.obs["Label"].values,unknown=class_dim)))
-test_embedding.obs["score_max"] = test_prob_max
-test_embedding.obs["binary_label"] = test_o_result
+# test_o_result = np.argmax(test_prob,axis = 1)
+# test_prob_max = np.max(test_prob,axis = 1)
+# test_pred_label = test_adata.obs['pred_label_num'].values
+# test_pred_label[test_pred_label != test_o_result] = class_dim
+# test_pred_label[test_prob_max < 0.5] = class_dim
+# print("test prob max EAS_EpiAnno:{} , same:{} , diff:{}".format(*compute_EAS_EpiAnno(y_pred=test_pred_label,origin_label=origin_label,y_true = test_adata.obs["Label"].values)))
+# print("test prob max EAS:{}".format(compute_EAS(y_pred=test_pred_label,y_true = test_adata.obs["Label"].values,unknown=class_dim)))
+# test_embedding.obs["score_max"] = test_prob_max
+# test_embedding.obs["binary_label"] = test_o_result
 # print("------------------------------------------------")
 # logit_test = torch.from_numpy(logit_test)
 # test_score = get_scores(logit_mat=logit_test)
